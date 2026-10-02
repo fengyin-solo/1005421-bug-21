@@ -1,6 +1,14 @@
 import { MODULE_BY_KEY } from '@/data/modules'
 import { allRows, listRows, resetRows, saveRows } from '@/data/local-store'
-import type { ActionResult, EntryRow, ModuleMeta, OverviewResult, PageResult } from '@/data/types'
+import { judgeThresholdRain } from '@/data/rain-ledger'
+import type {
+  ActionResult,
+  CreateResult,
+  EntryRow,
+  ModuleMeta,
+  OverviewResult,
+  PageResult,
+} from '@/data/types'
 
 // 会写进数据的「往回走」动作：命中就把这条记录标成异常态，看板上能一眼看出来。
 const NEGATIVE_ACTIONS = ['撤销', '作废', '拒绝', '驳回', '停用', '忽略', '下线', '回滚']
@@ -43,9 +51,23 @@ export function runAction(key: string, id: number, action: string): ActionResult
   if (current === target) {
     return { ok: false, message: `${meta.entity}已经是「${target}」，不用重复操作` }
   }
+  if (meta.sequential) {
+    // 状态按 statuses 登记的次序逐级推进，跨级的一律拦下。
+    const currentIndex = meta.statuses.indexOf(current)
+    const targetIndex = meta.statuses.indexOf(target)
+    if (targetIndex !== currentIndex + 1) {
+      return {
+        ok: false,
+        message: `${meta.entity}状态须按「${meta.statuses.join(' → ')}」逐级推进，不能从「${current}」跨到「${target}」`,
+      }
+    }
+  }
   const lastStatus = meta.statuses[meta.statuses.length - 1]
+  // 各模块最后一个「X状态」字段与流转状态保持一致，落库那份与明细不打架。
+  const statusField = meta.fields.find((field) => field.endsWith('状态'))
   const updated: EntryRow = {
     ...rows[index],
+    ...(statusField ? { [statusField]: target } : {}),
     status: target,
     pending: target !== lastStatus,
     abnormal: NEGATIVE_ACTIONS.some((verb) => action.startsWith(verb)),
@@ -102,4 +124,93 @@ export function loadOverview(): OverviewResult {
     { label: '异常量', value: modules.reduce((sum, item) => sum + item.abnormal, 0) },
   ]
   return { cards, modules }
+}
+
+// ---- 雨量站登记：判定口径只认 data/rain-ledger.ts 那一份（站网台账版） ----
+
+export type RainSubmission = {
+  站号: string
+  站点名称: string
+  所属流域: string
+  设备型号: string
+  阈值雨量: string
+  通信方式: string
+  校核日期: string
+}
+
+function nextId(rows: EntryRow[]): number {
+  return rows.reduce((max, row) => Math.max(max, Number(row.id) || 0), 0) + 1
+}
+
+/**
+ * 登记雨量站。
+ * - 阈值雨量按站网台账口径判定：整数、非负、不超上限；取到极值的一律退回核对（标异常）；
+ * - 同一站号重复提交不另起记录，核销清单也不重复挂；
+ * - 提交结论同步落到隐患核销清单，那边随之多一条待复核记录。
+ */
+export function createRainEntry(input: RainSubmission): CreateResult {
+  const meta = moduleMeta('rain')
+  for (const field of ['站号', '站点名称', '所属流域'] as const) {
+    if (!input[field].trim()) {
+      return { ok: false, created: false, message: `${field}不能为空` }
+    }
+  }
+  const verdict = judgeThresholdRain(input.阈值雨量)
+  if (verdict.kind === 'invalid') {
+    return { ok: false, created: false, message: verdict.message }
+  }
+  const rows = listRows('rain')
+  const stationNo = input.站号.trim()
+  if (rows.some((row) => String(row['站号']) === stationNo)) {
+    return { ok: true, created: false, message: `站号 ${stationNo} 已登记，同一站号重复提交不另起记录` }
+  }
+  const extreme = verdict.kind === 'extreme'
+  const conclusion = extreme ? verdict.message : '阈值雨量判定通过'
+  const entry: EntryRow = {
+    id: nextId(rows),
+    status: '待安装',
+    pending: true,
+    abnormal: extreme,
+    站号: stationNo,
+    站点名称: input.站点名称.trim(),
+    所属流域: input.所属流域.trim(),
+    设备型号: input.设备型号.trim(),
+    阈值雨量: verdict.value,
+    通信方式: input.通信方式.trim(),
+    校核日期: input.校核日期 || new Date().toISOString().slice(0, 10),
+    站点状态: '待安装',
+    判定备注: extreme ? verdict.message : '',
+  }
+  saveRows('rain', [...rows, entry])
+  syncClearance(entry, conclusion)
+  return {
+    ok: true,
+    created: true,
+    message: `${meta.entity}已登记，${conclusion}，结论已同步隐患核销清单（待复核）`,
+  }
+}
+
+/** 把雨量站登记结论落到隐患核销清单：同一站号只挂一条待复核，不重复起单。 */
+function syncClearance(station: EntryRow, conclusion: string): void {
+  const rows = listRows('clearance')
+  const owner = `${station['站点名称']}（${station['站号']}）`
+  if (rows.some((row) => String(row['所属隐患点']) === owner)) {
+    return
+  }
+  const id = nextId(rows)
+  const entry: EntryRow = {
+    id,
+    status: '待复核',
+    pending: true,
+    abnormal: Boolean(station.abnormal),
+    核销编号: `CLEA-${String(id).padStart(4, '0')}`,
+    所属隐患点: owner,
+    核销依据: `雨量站登记结论同步；所属流域：${station['所属流域']}`,
+    复核人: '待指派',
+    复核日期: '',
+    核销结论: conclusion,
+    归档日期: '',
+    核销状态: '待复核',
+  }
+  saveRows('clearance', [...rows, entry])
 }

@@ -1,3 +1,4 @@
+import { rejudgeRainRows } from './rain-ledger'
 import { SEED_ROWS } from './seed'
 import type { EntryRow } from './types'
 
@@ -8,22 +9,40 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
+// 改口径之后，存量雨量站每次读入都按站网台账口径重判一遍（幂等）。
+// 重判在数据层做一次，列表、面板、导出多处读取拿到的都是同一份结果。
+function rejudgeStoredRain(data: Record<string, EntryRow[]>): Record<string, EntryRow[]> {
+  const rain = data['rain']
+  if (!Array.isArray(rain)) {
+    return data
+  }
+  const { rows, changed } = rejudgeRainRows(rain)
+  if (!changed) {
+    return data
+  }
+  const next = { ...data, rain: rows }
+  if (typeof window !== 'undefined' && window.localStorage) {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+  }
+  return next
+}
+
 function readStorage(): Record<string, EntryRow[]> {
   const fallback = clone(SEED_ROWS)
   if (typeof window === 'undefined' || !window.localStorage) {
-    return fallback
+    return rejudgeStoredRain(fallback)
   }
   const raw = window.localStorage.getItem(STORAGE_KEY)
   if (!raw) {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(fallback))
-    return fallback
+    return rejudgeStoredRain(fallback)
   }
   try {
     const parsed = JSON.parse(raw) as Record<string, EntryRow[]>
-    return { ...fallback, ...parsed }
+    return rejudgeStoredRain({ ...fallback, ...parsed })
   } catch {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(fallback))
-    return fallback
+    return rejudgeStoredRain(fallback)
   }
 }
 

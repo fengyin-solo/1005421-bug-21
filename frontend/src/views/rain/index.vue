@@ -11,6 +11,26 @@
       </div>
     </header>
 
+    <form v-if="showCreate" class="create-panel" @submit.prevent="submitCreate">
+      <p class="create-hint">
+        阈值雨量按站网台账口径填整数（0–500mm），不再要求一位小数；取到极值 500mm 的记录一律退回核对。
+      </p>
+      <div class="create-grid">
+        <label v-for="field in createFields" :key="field.key" class="filter-item">
+          <span>{{ field.label }}</span>
+          <input
+            v-model="createForm[field.key]"
+            :type="field.type"
+            :placeholder="field.hint"
+          />
+        </label>
+      </div>
+      <div class="create-actions">
+        <button class="btn primary" type="submit">提交登记</button>
+        <button class="btn ghost" type="button" @click="closeCreate">取消</button>
+      </div>
+    </form>
+
     <div class="stat-row">
       <article v-for="item in stats" :key="item.label" class="stat-card">
         <span class="stat-label">{{ item.label }}</span>
@@ -65,6 +85,7 @@
 
     <footer class="page-foot">
       <span>共 {{ total }} 条雨量站网记录</span>
+      <span v-if="notice" class="notice-text">{{ notice }}</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
     </footer>
   </section>
@@ -74,6 +95,7 @@
 import { computed, onMounted, ref } from 'vue'
 
 import {
+  createRainEntry,
   downloadEntries,
   listEntries,
   moduleMeta,
@@ -85,19 +107,95 @@ const meta = moduleMeta('rain')
 const columns = ["站号", "站点名称", "所属流域", "设备型号", "阈值雨量", "通信方式", "校核日期", "站点状态"]
 const actions = ["提交安装", "登记故障", "办理撤除"]
 const statuses = ["待安装", "运行正常", "设备故障", "已撤除"]
-const stats = [{"label": "运行正常站点", "value": 0}, {"label": "故障站点", "value": 0}, {"label": "阈值雨量最小值", "value": 0}]
 
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')
+const notice = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+
+// 统计卡、状态分布、列表三处取的是同一份行数据，不各读各的。
+const stats = computed(() => {
+  const thresholds = rows.value
+    .map((row) => Number(row['阈值雨量']))
+    .filter((value) => Number.isFinite(value))
+  return [
+    { label: '运行正常站点', value: rows.value.filter((row) => row.status === '运行正常').length },
+    { label: '故障站点', value: rows.value.filter((row) => row.status === '设备故障').length },
+    { label: '阈值雨量最小值', value: thresholds.length ? Math.min(...thresholds) : '—' },
+  ]
+})
 const statusSummary = computed(() =>
   statuses.map((status: string) => ({
     status,
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+
+type CreateField = { key: keyof typeof createForm.value; label: string; type: string; hint: string }
+
+const showCreate = ref(false)
+const createForm = ref({
+  站号: '',
+  站点名称: '',
+  所属流域: '',
+  设备型号: '',
+  阈值雨量: '',
+  通信方式: '',
+  校核日期: '',
+})
+const createFields: CreateField[] = [
+  { key: '站号', label: '站号', type: 'text', hint: '如 RAIN-0005' },
+  { key: '站点名称', label: '站点名称', type: 'text', hint: '如 梨坪沟雨量站' },
+  { key: '所属流域', label: '所属流域', type: 'text', hint: '如 岷江上游流域' },
+  { key: '设备型号', label: '设备型号', type: 'text', hint: '如 JDZ-1 翻斗式雨量计' },
+  { key: '阈值雨量', label: '阈值雨量', type: 'text', hint: '整数，单位 mm' },
+  { key: '通信方式', label: '通信方式', type: 'text', hint: '如 GPRS / 北斗短报文' },
+  { key: '校核日期', label: '校核日期', type: 'date', hint: '' },
+]
+
+function today(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function resetCreateForm() {
+  createForm.value = {
+    站号: '',
+    站点名称: '',
+    所属流域: '',
+    设备型号: '',
+    阈值雨量: '',
+    通信方式: '',
+    校核日期: today(),
+  }
+}
+
+function openCreate() {
+  errorMessage.value = ''
+  notice.value = ''
+  resetCreateForm()
+  showCreate.value = true
+}
+
+function closeCreate() {
+  showCreate.value = false
+}
+
+function submitCreate() {
+  errorMessage.value = ''
+  notice.value = ''
+  const result = createRainEntry({ ...createForm.value })
+  if (!result.ok) {
+    errorMessage.value = result.message
+    return
+  }
+  notice.value = result.message
+  if (result.created) {
+    closeCreate()
+  }
+  reload()
+}
 
 function resetFilters() {
   filters.value = {}
@@ -108,17 +206,15 @@ function exportRows() {
   downloadEntries(meta.key)
 }
 
-function openCreate() {
-  errorMessage.value = '雨量站登记入口尚未接入审批流'
-}
-
 function runAction(action: string, row: EntryRow) {
   errorMessage.value = ''
+  notice.value = ''
   const result = applyAction(meta.key, Number(row.id), action)
   if (!result.ok) {
     errorMessage.value = result.message
     return
   }
+  notice.value = result.message
   reload()
 }
 
