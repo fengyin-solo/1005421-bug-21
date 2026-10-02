@@ -1,3 +1,4 @@
+import { rejudgeRainRows } from './rain-rules'
 import { SEED_ROWS } from './seed'
 import type { EntryRow } from './types'
 
@@ -11,20 +12,22 @@ function clone<T>(value: T): T {
 function readStorage(): Record<string, EntryRow[]> {
   const fallback = clone(SEED_ROWS)
   if (typeof window === 'undefined' || !window.localStorage) {
-    return fallback
+    return { ...fallback, rain: rejudgeRainRows(fallback.rain ?? []) }
   }
   const raw = window.localStorage.getItem(STORAGE_KEY)
-  if (!raw) {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(fallback))
-    return fallback
+  let merged = fallback
+  if (raw) {
+    try {
+      merged = { ...fallback, ...(JSON.parse(raw) as Record<string, EntryRow[]>) }
+    } catch {
+      merged = fallback
+    }
   }
-  try {
-    const parsed = JSON.parse(raw) as Record<string, EntryRow[]>
-    return { ...fallback, ...parsed }
-  } catch {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(fallback))
-    return fallback
-  }
+  // 存量雨量站按现行口径（rain-rules.ts 那一份）重判一遍并写回，
+  // 保证落库那份与明细对得上。
+  merged = { ...merged, rain: rejudgeRainRows(merged.rain ?? []) }
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(merged))
+  return merged
 }
 
 let cache: Record<string, EntryRow[]> | null = null

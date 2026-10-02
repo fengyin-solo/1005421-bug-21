@@ -44,6 +44,7 @@ export const MODULES: ModuleMeta[] = [
     statuses: ["待安装", "运行正常", "设备故障", "已撤除"],
     actions: ["提交安装", "登记故障", "办理撤除"],
     actionTargets: {"提交安装": "运行正常", "登记故障": "设备故障", "办理撤除": "已撤除"},
+    strictFlow: true,
     metrics: ["运行正常站点", "故障站点", "阈值雨量最小值"],
   },
   {

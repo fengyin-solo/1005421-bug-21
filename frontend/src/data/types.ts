@@ -17,6 +17,8 @@ export type ModuleMeta = {
   statuses: string[]
   actions: string[]
   actionTargets: Record<string, string>
+  // 为 true 时状态必须按 statuses 次序逐级推进，跨级动作直接拦下（雨量站网在用）
+  strictFlow?: boolean
   metrics: string[]
 }
 
@@ -29,6 +31,24 @@ export type PageResult = {
 
 export type ActionResult = {
   ok: boolean
+  message: string
+}
+
+// 雨量站登记入参：阈值雨量先按字符串进来，统一走 rain-rules.ts 判定后落整数。
+export type RainSubmission = {
+  站号: string
+  站点名称: string
+  所属流域: string
+  设备型号: string
+  阈值雨量: string
+  通信方式: string
+  校核日期: string
+}
+
+export type SubmitResult = {
+  ok: boolean
+  // 同一站号重复提交时为 false：不另起记录，也不算失败
+  created: boolean
   message: string
 }
 
